@@ -19,8 +19,11 @@ jobs:
           xcodebuild -version
       - name: Wine loader layout and startup
         run: spike/wineloader/smoke.sh
-      - name: Windows helper compiler
-        run: brew install mingw-w64
+      - name: Windows helper compiler and Discord smoke probe
+        run: |
+          brew install mingw-w64
+          x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror -static -s \
+            -o spike/discord-bridge/probe.exe spike/discord-bridge/probe.c
       - name: Rosetta
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
       - name: Recipe database
