@@ -159,6 +159,11 @@ public struct WineRunner: Sendable {
             !$0.key.hasPrefix("LSFGM_") && $0.key != "DISABLE_LSFGM"
         }
         process.environment = inherited.merging(env) { $1 }
+        // A direct helper spawn avoids recursively calling WineRunner. It shares the game
+        // environment and is ready before an SDK attempts its first named-pipe connection.
+        if args.first?.lowercased().hasSuffix(".exe") == true {
+            DiscordPresence.shared.ensureBridge(engine: engine, bottle: bottle, environment: process.environment ?? env)
+        }
         // drive_c only exists after the first wineboot — fall back to the bottle root on fresh prefixes.
         process.currentDirectoryURL = workingDirectory
             ?? (FileManager.default.fileExists(atPath: bottle.driveC.path) ? bottle.driveC : bottle.url)

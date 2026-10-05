@@ -105,10 +105,12 @@ cp spike/tools/cabextract.LICENSE "$APP/Contents/Resources/tools/cabextract.LICE
 if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
   spike/epic-stub/build.sh >/dev/null
   cp spike/epic-stub/EpicGamesLauncher.exe "$APP/Contents/Resources/EpicGamesLauncher.exe"
+  spike/discord-bridge/build.sh
+  cp spike/discord-bridge/highball-discord-bridge.exe "$APP/Contents/Resources/highball-discord-bridge.exe"
 elif [ "$CONFIG" = release ]; then
   echo "error: release build needs mingw-w64 (brew install mingw-w64) to build spike/epic-stub" >&2; exit 1
 else
-  echo "note: no mingw-w64, the Epic launcher stand-in is not bundled (debug build)"
+  echo "note: no mingw-w64, the Epic stand-in and Discord pipe bridge are not bundled (debug build)"
 fi
 RECIPES="../highball-db/recipes"
 if [ ! -d "$RECIPES" ]; then

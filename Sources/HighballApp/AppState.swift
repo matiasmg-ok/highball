@@ -809,6 +809,7 @@ final class AppState {
         installWatcher?.watch(bottles.flatMap(installDirectories) + MacSteam.steamappsDirectories())
         macSteamGames = MacSteam.installedGames()
         startSteamClientWatch()
+        startDiscordWatch()
         libraryPlays = libraryStore.load()
         libraryOverrides = libraryStore.rendererOverrides()
         rebuildLibrary()
@@ -1617,6 +1618,30 @@ final class AppState {
     /// with Show and Quit.
     var steamClients: Set<String> = []
     @ObservationIgnored private var steamClientWatch: Task<Void, Never>?
+
+    @ObservationIgnored private var discordWatch: Task<Void, Never>?
+
+    private func startDiscordWatch() {
+        guard discordWatch == nil else { return }
+        discordWatch = Task.detached(priority: .utility) { [weak self] in
+            var previous: [DiscordRunningGame] = []
+            while !Task.isCancelled {
+                guard let self else { return }
+                let (bottles, games, engines, paths) = await MainActor.run { [self] in
+                    (self.bottles, self.gamesByBottle, self.engines, self.paths)
+                }
+                // Attach to clients already running when Highball opens.
+                for bottle in bottles {
+                    guard let env = ProcessTable.liveServerEnvironment(forPrefix: bottle.url),
+                          let engine = engines.first(where: { $0.id == bottle.settings.engineID }) else { continue }
+                    DiscordPresence.shared.ensureBridge(engine: engine, bottle: bottle, environment: env)
+                }
+                previous = DiscordPresence.shared.runningGames(bottles: bottles, steamGames: games, previous: previous)
+                await DiscordPresence.shared.update(games: previous, paths: paths)
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
 
     private func startSteamClientWatch() {
         guard steamClientWatch == nil else { return }
