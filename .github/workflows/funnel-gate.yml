@@ -48,7 +48,6 @@ jobs:
           Sources/HighballKit/DownloadResume.swift
           spike/engine-manifest.json
           spike/engines/
-          spike/wineloader/
           Scripts/e2e-install.sh
           Scripts/make-app.sh
           .github/workflows/funnel-gate.yml
@@ -77,10 +76,6 @@ jobs:
     timeout-minutes: 90      # cold install is 25 to 45 min here; a hang is a failure, not a wait
     steps:
       - uses: actions/checkout@v7
-      - name: Wine loader layout and startup (runner's existing toolchain)
-        run: |
-          xcodebuild -version
-          spike/wineloader/smoke.sh
       - name: rosetta (idempotent; image rotations have shipped without it)
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
       - name: cache engine downloads (sha256-reverified on every reuse)

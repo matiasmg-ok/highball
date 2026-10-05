@@ -1,52 +1,126 @@
-name: Discord compatibility trial
+name: Original CI compatibility trial
 on:
   push:
     branches: [codex/test-discord-macos15]
 permissions:
   contents: read
+  pull-requests: read
 concurrency:
   group: discord-compatibility-trial
   cancel-in-progress: true
 jobs:
-  macos15:
+  build-test:
     runs-on: macos-15
-    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
-      - name: Record the original runner environment
-        run: |
-          sw_vers
-          xcodebuild -version
-      - name: Wine loader layout and startup
-        run: spike/wineloader/smoke.sh
-      - name: Windows helper compiler and Discord smoke probe
-        run: |
-          brew install mingw-w64
-          x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror -static -s \
-            -o spike/discord-bridge/probe.exe spike/discord-bridge/probe.c
-      - name: Rosetta
-        run: sudo softwareupdate --install-rosetta --agree-to-license || true
-      - name: Recipe database
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app || sudo xcode-select -s /Applications/Xcode_16.0.app || true
+      - name: Build
+        run: swift build
+      # The db checkout has to sit next to the repo before the unit tests: RecipeDBTests
+      # decode every shipped recipe and row and skip themselves when it is absent, which
+      # left five of them silently unrun on every CI run until 2026-09-18.
+      - name: Check out highball-db next to the repo
         run: git clone --depth 1 https://github.com/gauthierpiarrette/highball-db.git ../highball-db
-      - uses: actions/cache@v6
+      - name: Unit tests
+        run: swift test
+      - name: Upgrade smoke (an existing install is still seen; headless)
+        run: Scripts/upgrade-smoke.sh
+      - name: First-run smoke (empty home installs the engine; headless)
+        run: Scripts/firstrun-smoke.sh
+      - name: Validate recipes against the CLI (from highball-db)
+        run: |
+          for f in ../highball-db/recipes/launchers/*.json ../highball-db/recipes/games/*.json ../highball-db/recipes/tweaks/*.json; do
+            .build/debug/highball recipe show "$f" > /dev/null || exit 1
+          done
+  # The one place the funnel's file list lives. A trailing slash means "anything under here".
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      funnel: ${{ steps.decide.outputs.funnel }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != pull_request ]; then
+            echo "run by hand, so the install runs"
+            echo "funnel=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat > /tmp/funnel-paths <<'EOF'
+          Sources/HighballKit/EngineStore.swift
+          Sources/HighballKit/BottleStore.swift
+          Sources/HighballKit/WineRunner.swift
+          Sources/HighballKit/Manifest.swift
+          Sources/HighballKit/Paths.swift
+          Sources/HighballKit/DownloadResume.swift
+          spike/engine-manifest.json
+          spike/engines/
+          Scripts/e2e-install.sh
+          Scripts/make-app.sh
+          .github/workflows/funnel-gate.yml
+          .github/workflows/nightly-e2e.yml
+          EOF
+          gh api "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.number }}/files" \
+            --paginate --jq '.[].filename' > /tmp/changed
+          echo "changed files:"; sed 's/^/  /' /tmp/changed
+          funnel=false
+          while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            case "$p" in
+              # literal prefix, not a regex: a path with a dot in it must not act as a wildcard
+              */) awk -v p="$p" 'index($0, p) == 1 { hit = 1 } END { exit !hit }' /tmp/changed \
+                    && funnel=true ;;
+              *)  grep -qxF "$p" /tmp/changed && funnel=true ;;
+            esac
+          done < /tmp/funnel-paths
+          echo "funnel=$funnel" | tee -a "$GITHUB_OUTPUT"
+
+  # Named apart from the nightly's "e2e" so the two never read as the same check.
+  funnel-install:
+    needs: scope
+    if: needs.scope.outputs.funnel == 'true'
+    runs-on: macos-15        # pinned like the nightly; macos-latest re-points silently
+    timeout-minutes: 90      # cold install is 25 to 45 min here; a hang is a failure, not a wait
+    steps:
+      - uses: actions/checkout@v7
+      - name: rosetta (idempotent; image rotations have shipped without it)
+        run: sudo softwareupdate --install-rosetta --agree-to-license || true
+      - name: cache engine downloads (sha256-reverified on every reuse)
+        uses: actions/cache@v6
         with:
           path: ~/hb-e2e/downloads
           key: engine-dl-${{ hashFiles('spike/engine-manifest.json') }}
           restore-keys: engine-dl-
-      - name: Original install E2E on macOS 15
-        run: Scripts/e2e-install.sh --db ../highball-db
-      - name: App minimum OS remains 14.0
-        run: |
-          test "$(plutil -extract LSMinimumSystemVersion raw dist/Highball.app/Contents/Info.plist)" = 14.0
-          xcrun vtool -show-build dist/Highball.app/Contents/MacOS/Highball
-          xcrun vtool -show-build dist/Highball.app/Contents/MacOS/Highball | awk '/minos/ { seen = 1; if ($2 != "14.0") exit 1 } END { if (!seen) exit 1 }'
-      - name: Unit tests and Discord Wine pipe smoke
-        run: |
-          ENGINE_ID=$(python3 -c 'import json; print(json.load(open("spike/engine-manifest.json"))["id"])')
-          HIGHBALL_DISCORD_SMOKE_ENGINE="$HOME/hb-e2e/engines/$ENGINE_ID" swift test
-      - name: Teardown
+      - name: fresh install from the built bundle's manifest
+        run: Scripts/e2e-install.sh
+      - name: teardown
         if: always()
         run: |
           for ws in "$HOME"/hb-e2e/engines/*/engine/bin/wineserver; do
             [ -x "$ws" ] && "$ws" -k 2>/dev/null || true
           done
+
+  # The required context. Always runs, so a pull request is never held up waiting for a
+  # status that cannot arrive. Green on its own when the change is outside the funnel.
+  install:
+    needs: [scope, funnel-install]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: report
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.scope.result }}" != success ]; then
+            echo "could not work out what this pull request touches"
+            exit 1
+          fi
+          if [ "${{ needs.scope.outputs.funnel }}" != true ]; then
+            echo "nothing here touches the install funnel, so the install did not run"
+            exit 0
+          fi
+          # index syntax, not a dot: a hyphen in a job id reads as minus in an expression
+          echo "install funnel touched, the install said: ${{ needs['funnel-install'].result }}"
+          [ "${{ needs['funnel-install'].result }}" = success ]
