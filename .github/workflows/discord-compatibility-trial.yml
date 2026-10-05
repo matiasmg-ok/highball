@@ -1,0 +1,49 @@
+name: Discord compatibility trial
+on:
+  push:
+    branches: [codex/test-discord-macos15]
+permissions:
+  contents: read
+concurrency:
+  group: discord-compatibility-trial
+  cancel-in-progress: true
+jobs:
+  macos15:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Record the original runner environment
+        run: |
+          sw_vers
+          xcodebuild -version
+      - name: Wine loader layout and startup
+        run: spike/wineloader/smoke.sh
+      - name: Windows helper compiler
+        run: brew install mingw-w64
+      - name: Rosetta
+        run: sudo softwareupdate --install-rosetta --agree-to-license || true
+      - name: Recipe database
+        run: git clone --depth 1 https://github.com/gauthierpiarrette/highball-db.git ../highball-db
+      - uses: actions/cache@v6
+        with:
+          path: ~/hb-e2e/downloads
+          key: engine-dl-${{ hashFiles('spike/engine-manifest.json') }}
+          restore-keys: engine-dl-
+      - name: Original install E2E on macOS 15
+        run: Scripts/e2e-install.sh --db ../highball-db
+      - name: App minimum OS remains 14.0
+        run: |
+          test "$(plutil -extract LSMinimumSystemVersion raw dist/Highball.app/Contents/Info.plist)" = 14.0
+          xcrun vtool -show-build dist/Highball.app/Contents/MacOS/Highball
+          xcrun vtool -show-build dist/Highball.app/Contents/MacOS/Highball | awk '/minos/ { seen = 1; if ($2 != "14.0") exit 1 } END { if (!seen) exit 1 }'
+      - name: Unit tests and Discord Wine pipe smoke
+        run: |
+          ENGINE_ID=$(python3 -c 'import json; print(json.load(open("spike/engine-manifest.json"))["id"])')
+          HIGHBALL_DISCORD_SMOKE_ENGINE="$HOME/hb-e2e/engines/$ENGINE_ID" swift test
+      - name: Teardown
+        if: always()
+        run: |
+          for ws in "$HOME"/hb-e2e/engines/*/engine/bin/wineserver; do
+            [ -x "$ws" ] && "$ws" -k 2>/dev/null || true
+          done

@@ -26,7 +26,7 @@
  * hands over to __wine_main, with two changes, both marked "Highball" below:
  *
  *  1. On arm64 it hands Wine the __PAGEZERO range as its reserved low memory. Linked with a
- *     PAGEZERO of 0x170000000 and the linker's -x86_64_layout_emulation, and signed with Apple's
+ *     PAGEZERO of 0x170000000 and 16 KB segment alignment, and signed with Apple's
  *     cross-architecture entitlement, the kernel lets the process map there, which is where 32-bit
  *     and 64-bit Windows programs expect their memory (highball-engine patch 0018 is the same change
  *     for the engine's own, unsigned loader).
