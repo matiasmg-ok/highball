@@ -72,10 +72,15 @@ jobs:
   funnel-install:
     needs: scope
     if: needs.scope.outputs.funnel == 'true'
-    runs-on: macos-15        # pinned like the nightly; macos-latest re-points silently
+    # The app bundle builds the arm64 Wine loader, whose layout flag needs Xcode 26.4+.
+    runs-on: macos-26        # pinned: macos-latest re-points silently
     timeout-minutes: 90      # cold install is 25 to 45 min here; a hang is a failure, not a wait
     steps:
       - uses: actions/checkout@v7
+      - name: Select Xcode 26.4.1 (Wine loader linker support)
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.4.1.app/Contents/Developer
+          xcodebuild -version
       - name: rosetta (idempotent; image rotations have shipped without it)
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
       - name: cache engine downloads (sha256-reverified on every reuse)
